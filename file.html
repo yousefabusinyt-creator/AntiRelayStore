@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1458cc">
+  <title>Bookmark Store</title>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <style>
+    :root { color-scheme: light dark; font: 16px system-ui, sans-serif; }
+    body { max-width: 720px; margin: 0 auto; padding: 24px 16px; }
+    h1 { margin-bottom: 4px; }
+    .muted { opacity: .7; }
+    form, .toolbar { display: flex; gap: 8px; margin: 16px 0; }
+    input { box-sizing: border-box; min-width: 0; flex: 1; padding: 11px; border: 1px solid #8888; border-radius: 8px; }
+    button, .button { padding: 10px 13px; border: 0; border-radius: 8px; background: #1458cc; color: white; cursor: pointer; }
+    .secondary { background: #555; }
+    .card { border: 1px solid #8885; border-radius: 10px; padding: 14px; margin: 10px 0; }
+    .card a { overflow-wrap: anywhere; }
+    .card p { margin: 6px 0 0; }
+    .remove { float: right; background: #a22; }
+    #fileInput { display: none; }
+    @media (max-width: 520px) {
+      form { flex-wrap: wrap; }
+      form input { flex-basis: 40%; }
+      .toolbar { flex-wrap: wrap; }
+      .toolbar input { flex-basis: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Bookmark Store</h1>
+  <p class="muted">Save links, find them later, or search the web.</p>
+
+  <form id="webSearch">
+    <input id="query" placeholder="Search the web…" aria-label="Search the web">
+    <button type="submit">Search web</button>
+  </form>
+
+  <form id="addForm">
+    <input id="title" placeholder="Bookmark name" required aria-label="Bookmark name">
+    <input id="url" placeholder="https://example.com" type="url" required aria-label="Bookmark URL">
+    <button type="submit">Save bookmark</button>
+  </form>
+
+  <div class="toolbar">
+    <input id="filter" placeholder="Search saved bookmarks…" aria-label="Search saved bookmarks">
+    <button class="secondary" id="exportBtn" type="button">Export</button>
+    <button class="secondary" id="importBtn" type="button">Import</button>
+    <input id="fileInput" type="file" accept="application/json">
+  </div>
+
+  <p id="status" class="muted" role="status"></p>
+  <div id="bookmarks"></div>
+
+  <script>
+    const STORAGE_KEY = "bookmark-store-items";
+    const status = document.querySelector("#status");
+    let bookmarks;
+
+    try {
+      bookmarks = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+      if (!Array.isArray(bookmarks)) bookmarks = [];
+    } catch {
+      bookmarks = [];
+    }
+
+    function save() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(bookmarks));
+    }
+
+    function render() {
+      const term = document.querySelector("#filter").value.trim().toLowerCase();
+      const list = document.querySelector("#bookmarks");
+      list.replaceChildren();
+
+      const matches = bookmarks.filter(item =>
+        `${item.title} ${item.url}`.toLowerCase().includes(term)
+      );
+
+      if (!matches.length) {
+        list.textContent = bookmarks.length
+          ? "No matching bookmarks."
+          : "No bookmarks yet. Add one above.";
+        return;
+      }
+
+      for (const item of matches) {
+        const card = document.createElement("article");
+        card.className = "card";
+
+        const remove = document.createElement("button");
+        remove.className = "remove";
+        remove.type = "button";
+        remove.textContent = "Remove";
+        remove.setAttribute("aria-label", `Remove ${item.title}`);
+        remove.onclick = () => {
+          bookmarks = bookmarks.filter(saved => saved.id !== item.id);
+          save();
+          render();
+        };
+
+        const link = document.createElement("a");
+        link.href = item.url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = item.title;
+
+        const address = document.createElement("p");
+        address.className = "muted";
+        address.textContent = item.url;
+
+        card.append(remove, link, address);
+        list.append(card);
+      }
+    }
+
+    document.querySelector("#addForm").addEventListener("submit", event => {
+      event.preventDefault();
+      const title = document.querySelector("#title").value.trim();
+      const url = document.querySelector("#url").value.trim();
+
+      bookmarks.unshift({
+        id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())),
+        title,
+        url
+      });
+
+      save();
+      event.target.reset();
+      status.textContent = "Bookmark saved.";
+      render();
+    });
+
+    document.querySelector("#webSearch").addEventListener("submit", event => {
+      event.preventDefault();
+      const query = document.querySelector("#query").value.trim();
+      if (query) {
+        window.open(
+          "https://duckduckgo.com/?q=" + encodeURIComponent(query),
+          "_blank",
+          "noopener,noreferrer"
+        );
+      }
+    });
+
+    document.querySelector("#filter").addEventListener("input", render);
+
+    document.querySelector("#exportBtn").addEventListener("click", () => {
+      const blob = new Blob([JSON.stringify(bookmarks, null, 2)], {
+        type: "application/json"
+      });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "bookmarks.json";
+      link.click();
+      URL.revokeObjectURL(link.href);
+      status.textContent = "Bookmark file exported.";
+    });
+
+    document.querySelector("#importBtn").addEventListener("click", () => {
+      document.querySelector("#fileInput").click();
+    });
+
+    document.querySelector("#fileInput").addEventListener("change", async event => {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      try {
+        const imported = JSON.parse(await file.text());
+        if (!Array.isArray(imported)) throw new Error("Expected a list");
+
+        const valid = imported.filter(item =>
+          item && typeof item.title === "string" &&
+          typeof item.url === "string" &&
+          /^https?:\/\//i.test(item.url)
+        ).map(item => ({
+          id: item.id || String(Date.now() + Math.random()),
+          title: item.title,
+          url: item.url
+        }));
+
+        bookmarks = [...valid, ...bookmarks];
+        save();
+        status.textContent = `Imported ${valid.length} bookmark(s).`;
+        render();
+      } catch {
+        status.textContent = "That file could not be imported. Use a bookmarks.json export.";
+      }
+
+      event.target.value = "";
+    });
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./sw.js").catch(() => {
+        status.textContent = "Offline support could not be enabled.";
+      });
+    }
+
+    render();
+  </script>
+</body>
+</html>
